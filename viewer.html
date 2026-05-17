@@ -140,6 +140,16 @@
   let isDragging = false, prevX = 0, prevY = 0
   let fov = 75
   let peer = null, call = null
+  let streamReceived = false
+
+  // ICE servers : STUN Google + TURN public openrelay (relais NAT)
+  const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+  ]
 
   const urlId = new URLSearchParams(location.search).get('id')
   if (urlId) idInput.value = urlId
@@ -248,14 +258,21 @@
     })
   }
 
-  function makeSilentStream () {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)()
-    const osc = ctx.createOscillator()
-    const dst = ctx.createMediaStreamDestination()
-    osc.connect(dst); osc.start()
-    const track = dst.stream.getAudioTracks()[0]
-    track.enabled = false
-    return new MediaStream([track])
+  // PeerJS exige un stream local pour call(). On envoie un faux flux VIDÉO
+  // (canvas noir) pour que la négociation SDP contienne bien une m-line vidéo
+  // → sinon le streamer ne peut pas y attacher sa piste vidéo dans l'answer.
+  function makeFakeVideoStream () {
+    const fake = document.createElement('canvas')
+    fake.width = 16; fake.height = 16
+    const fctx = fake.getContext('2d')
+    fctx.fillStyle = '#000'
+    fctx.fillRect(0, 0, 16, 16)
+    // Anime légèrement pour garantir des frames
+    setInterval(() => {
+      fctx.fillStyle = '#000'
+      fctx.fillRect(0, 0, 16, 16)
+    }, 1000)
+    return fake.captureStream(1)   // 1 fps suffit, c'est juste pour ouvrir la m-line
   }
 
   function connect (targetId) {
@@ -263,44 +280,72 @@
     errEl.classList.remove('on')
     btnJoin.disabled = true
     btnJoin.textContent = 'Connexion…'
+    streamReceived = false
 
-    peer = new Peer({ debug: 1 })
+    peer = new Peer({ debug: 2, config: { iceServers: ICE_SERVERS } })
 
-    peer.on('open', () => {
-      const fakeStream = makeSilentStream()
-      call = peer.call(targetId, fakeStream)
+    peer.on('open', myId => {
+      console.log('[viewer] PeerJS open, my id:', myId, '→ appel de', targetId)
+      const fakeStream = makeFakeVideoStream()
+      call = peer.call(targetId, fakeStream, { config: { iceServers: ICE_SERVERS } })
       if (!call) { showError('Impossible d\'appeler ' + targetId); resetJoin(); return }
 
-      call.on('stream', remoteStream => {
+      function handleRemoteStream (remoteStream, source) {
+        if (streamReceived) return
+        console.log('[viewer] stream reçu via', source, remoteStream.getTracks())
+        streamReceived = true
         splash.style.display = 'none'
         bottombar.classList.add('on')
         badgeConn.classList.remove('on')
         badgeLive.classList.add('on')
         if (!renderer) initThree()
         videoEl.srcObject = remoteStream
-        videoEl.play().catch(()=>{})
-      })
+        videoEl.play().catch(err => console.warn('play() failed', err))
+      }
+
+      // Debug ICE + ontrack direct (PeerJS oublie parfois de fire 'stream' en flux asymétrique)
+      if (call.peerConnection) {
+        call.peerConnection.addEventListener('iceconnectionstatechange', () => {
+          console.log('[viewer] ICE:', call.peerConnection.iceConnectionState)
+        })
+        call.peerConnection.addEventListener('track', evt => {
+          console.log('[viewer] ontrack:', evt.track.kind, 'streams:', evt.streams.length)
+          if (evt.streams && evt.streams[0]) handleRemoteStream(evt.streams[0], 'ontrack')
+          else {
+            // Construire un MediaStream depuis le track isolé
+            handleRemoteStream(new MediaStream([evt.track]), 'ontrack-fallback')
+          }
+        })
+      }
+
+      call.on('stream', remoteStream => handleRemoteStream(remoteStream, 'peerjs-stream'))
 
       call.on('close', () => {
         badgeLive.classList.remove('on')
-        showError('Le diffuseur a coupé la connexion.')
+        if (streamReceived) showError('Le diffuseur a coupé la connexion.')
+        else                showError('Connexion P2P impossible (NAT/firewall, ID invalide, ou diffuseur hors ligne). Ouvre la console F12 pour le détail.')
         resetJoin()
       })
 
-      call.on('error', err => { showError('Erreur appel : ' + err.message); resetJoin() })
+      call.on('error', err => {
+        console.error('[viewer] call error', err)
+        showError('Erreur appel : ' + (err.message || err.type))
+        resetJoin()
+      })
 
       setTimeout(() => {
-        if (call && (!videoEl || !videoEl.srcObject)) {
-          showError('Aucune réponse du diffuseur. Vérifie l\'ID.')
+        if (call && !streamReceived) {
+          showError('Aucun flux reçu après 15 s. ID invalide ou réseau bloque WebRTC ?')
           try { call.close() } catch(_) {}
           resetJoin()
         }
-      }, 12000)
+      }, 15000)
     })
 
     peer.on('error', err => {
-      if (err.type === 'peer-unavailable') showError('ID introuvable : ' + targetId)
-      else showError('Erreur P2P : ' + err.type)
+      console.error('[viewer] peer error', err)
+      if (err.type === 'peer-unavailable') showError('ID introuvable : ' + targetId + ' (le diffuseur n\'est pas en ligne ou l\'ID a changé)')
+      else showError('Erreur P2P : ' + err.type + ' — ' + (err.message || ''))
       resetJoin()
     })
   }

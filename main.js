@@ -34,7 +34,7 @@ function createWindow() {
   win.once('ready-to-show', () => win.show())
 
   // Ouvre DevTools uniquement en dev (commenter en prod)
-  // win.webContents.openDevTools()
+  //win.webContents.openDevTools()
 }
 
 app.whenReady().then(() => {

@@ -51,6 +51,14 @@
   const activeCalls = new Map()
   const DEFAULT_VIEWER_BASE = 'viewer.html'
   const LS_BASE_KEY = 'x5_viewer_base'
+  // ICE servers : STUN Google + TURN public openrelay (relais pour NAT/firewall)
+  const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80',  username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+  ]
 
   // ── Initialisation Three.js ────────────────────────────────────────────────
   function initThree () {
@@ -336,9 +344,10 @@
     liveQr.classList.remove('on')
 
     peerId = shortId()
-    peer   = new Peer(peerId, { debug: 1 })
+    peer   = new Peer(peerId, { debug: 2, config: { iceServers: ICE_SERVERS } })
 
     peer.on('open', id => {
+      console.log('[streamer] PeerJS open, id:', id)
       peerId = id
       liveIdInput.value = id
       refreshUrlAndQr()
@@ -348,12 +357,21 @@
     })
 
     peer.on('call', call => {
+      console.log('[streamer] incoming call from', call.peer)
       call.answer(stream)
       activeCalls.set(call.peer, call)
       updateViewerCount()
-      call.on('close', () => { activeCalls.delete(call.peer); updateViewerCount() })
+      if (call.peerConnection) {
+        call.peerConnection.addEventListener('iceconnectionstatechange', () => {
+          console.log('[streamer] ICE with', call.peer, ':', call.peerConnection.iceConnectionState)
+        })
+      }
+      call.on('close', () => {
+        console.log('[streamer] call closed:', call.peer)
+        activeCalls.delete(call.peer); updateViewerCount()
+      })
       call.on('error', err => {
-        console.warn('call error', err)
+        console.warn('[streamer] call error', err)
         activeCalls.delete(call.peer); updateViewerCount()
       })
     })
