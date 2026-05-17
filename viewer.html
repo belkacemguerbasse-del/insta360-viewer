@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Insta360 Live 360°</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #0a0a0f; color: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; }
+  body { display: flex; flex-direction: column; }
+
+  #topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px; height: 44px; flex-shrink: 0;
+    background: rgba(0,0,0,0.55); border-bottom: 0.5px solid rgba(255,255,255,0.08);
+  }
+  .logo { font-size: 13px; font-weight: 600; }
+  .logo span { color: #5dcaa5; }
+  .right { display: flex; align-items: center; gap: 8px; }
+
+  .badge {
+    display: none; align-items: center; gap: 5px;
+    padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
+  }
+  .badge.on { display: flex; }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .badge.live { background: rgba(226,75,74,0.2); border: 0.5px solid rgba(226,75,74,0.4); color: #f09595; }
+  .badge.live .dot { background: #e24b4a; animation: pulse 1.2s infinite; }
+  .badge.connecting { background: rgba(255,184,77,0.15); color: #ffb84d; border: 0.5px solid rgba(255,184,77,0.3); }
+  .badge.connecting .dot { background: #ffb84d; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  #main { flex: 1; position: relative; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.grabbing { cursor: grabbing; }
+
+  #splash {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; background: #0a0a0f; padding: 20px;
+  }
+  #splash h2 { font-size: 17px; font-weight: 500; }
+  #splash p { font-size: 12px; color: rgba(255,255,255,0.5); text-align: center; max-width: 320px; line-height: 1.6; }
+  #splash input {
+    background: rgba(255,255,255,0.06); border: 0.5px solid rgba(255,255,255,0.15);
+    border-radius: 7px; color: #fff; font-size: 13px; padding: 8px 12px;
+    width: 240px; text-align: center; outline: none;
+    font-family: 'SF Mono', Menlo, monospace;
+  }
+  #splash button {
+    background: #1d9e75; border: none; border-radius: 8px;
+    color: #fff; font-size: 13px; font-weight: 500;
+    padding: 9px 24px; cursor: pointer;
+  }
+  #splash button:hover { background: #0f6e56; }
+  #splash button:disabled { opacity: 0.4; cursor: default; }
+  #err { display:none; color: #f09595; font-size: 11px;
+    background: rgba(226,75,74,0.12); border: 0.5px solid rgba(226,75,74,0.3);
+    padding: 6px 12px; border-radius: 6px; max-width: 320px; text-align: center; }
+  #err.on { display: block; }
+
+  #bottombar {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 10px 14px; display: none; gap: 10px; align-items: center;
+    background: linear-gradient(to top, rgba(0,0,0,0.65) 0%, transparent 100%);
+  }
+  #bottombar.on { display: flex; }
+  .bb-btn {
+    background: rgba(255,255,255,0.1); border: 0.5px solid rgba(255,255,255,0.18);
+    border-radius: 7px; color: #fff; font-size: 12px; padding: 6px 12px; cursor: pointer;
+  }
+  .bb-btn:hover { background: rgba(255,255,255,0.2); }
+
+  #fov-group { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  #fov-group label { font-size: 11px; color: rgba(255,255,255,0.5); }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 100px; height: 3px; background: rgba(255,255,255,0.2);
+    border-radius: 2px; outline: none;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; border-radius: 50%; background: #5dcaa5; cursor: pointer;
+  }
+  #fov-val { font-size: 11px; color: rgba(255,255,255,0.6); min-width: 28px; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">Insta360 <span>360°</span> Live</div>
+  <div class="right">
+    <div class="badge connecting" id="badge-conn"><span class="dot"></span>CONNEXION</div>
+    <div class="badge live" id="badge-live"><span class="dot"></span>LIVE</div>
+  </div>
+</div>
+
+<div id="main">
+  <canvas id="c"></canvas>
+
+  <div id="splash">
+    <h2>Rejoindre un live 360°</h2>
+    <p>Entre l'ID de session partagé par le diffuseur :</p>
+    <input id="id-input" placeholder="x5-xxxxxx" />
+    <button id="btn-join">Rejoindre</button>
+    <div id="err"></div>
+  </div>
+
+  <div id="bottombar">
+    <button class="bb-btn" id="btn-center">Centrer</button>
+    <button class="bb-btn" id="btn-fs">Plein écran</button>
+    <div id="fov-group">
+      <label>Zoom</label>
+      <input type="range" id="fov" min="30" max="110" value="75" step="1">
+      <span id="fov-val">75°</span>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+'use strict'
+;(function () {
+  const canvas    = document.getElementById('c')
+  const splash    = document.getElementById('splash')
+  const errEl     = document.getElementById('err')
+  const idInput   = document.getElementById('id-input')
+  const btnJoin   = document.getElementById('btn-join')
+  const badgeConn = document.getElementById('badge-conn')
+  const badgeLive = document.getElementById('badge-live')
+  const bottombar = document.getElementById('bottombar')
+  const btnCenter = document.getElementById('btn-center')
+  const btnFs     = document.getElementById('btn-fs')
+  const fovRange  = document.getElementById('fov')
+  const fovValEl  = document.getElementById('fov-val')
+
+  let renderer, scene, camera, sphere, videoTex, videoEl
+  let lon = 0, lat = 0
+  let isDragging = false, prevX = 0, prevY = 0
+  let fov = 75
+  let peer = null, call = null
+
+  const urlId = new URLSearchParams(location.search).get('id')
+  if (urlId) idInput.value = urlId
+
+  function showError (msg) {
+    errEl.textContent = msg
+    errEl.classList.add('on')
+    badgeConn.classList.remove('on')
+  }
+
+  function initThree () {
+    const w = canvas.parentElement.clientWidth
+    const h = canvas.parentElement.clientHeight
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+    renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.setSize(w, h)
+    renderer.setClearColor(0x0a0a0f)
+    scene  = new THREE.Scene()
+    camera = new THREE.PerspectiveCamera(fov, w / h, 0.1, 2000)
+    camera.position.set(0, 0, 0.001)
+
+    videoEl = document.createElement('video')
+    videoEl.autoplay = true; videoEl.muted = true; videoEl.playsInline = true
+
+    videoTex = new THREE.VideoTexture(videoEl)
+    videoTex.minFilter = THREE.LinearFilter
+    videoTex.magFilter = THREE.LinearFilter
+    videoTex.format    = THREE.RGBFormat
+
+    const geo = new THREE.SphereGeometry(800, 64, 48)
+    geo.scale(-1, 1, 1)
+    sphere = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: videoTex }))
+    scene.add(sphere)
+
+    window.addEventListener('resize', onResize)
+    attachControls()
+    renderLoop()
+  }
+
+  function onResize () {
+    if (!renderer) return
+    const el = canvas.parentElement
+    renderer.setSize(el.clientWidth, el.clientHeight)
+    camera.aspect = el.clientWidth / el.clientHeight
+    camera.updateProjectionMatrix()
+  }
+
+  function renderLoop () {
+    requestAnimationFrame(renderLoop)
+    if (videoTex) videoTex.needsUpdate = true
+    lat = Math.max(-85, Math.min(85, lat))
+    const phi = THREE.MathUtils.degToRad(90 - lat)
+    const theta = THREE.MathUtils.degToRad(lon)
+    camera.lookAt(Math.sin(phi)*Math.cos(theta), Math.cos(phi), Math.sin(phi)*Math.sin(theta))
+    renderer.render(scene, camera)
+  }
+
+  function attachControls () {
+    canvas.addEventListener('mousedown', e => {
+      isDragging = true; prevX = e.clientX; prevY = e.clientY
+      canvas.classList.add('grabbing')
+    })
+    window.addEventListener('mousemove', e => {
+      if (!isDragging) return
+      lon -= (e.clientX - prevX) * 0.18
+      lat += (e.clientY - prevY) * 0.18
+      prevX = e.clientX; prevY = e.clientY
+    })
+    window.addEventListener('mouseup', () => { isDragging = false; canvas.classList.remove('grabbing') })
+
+    canvas.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return
+      isDragging = true; prevX = e.touches[0].clientX; prevY = e.touches[0].clientY
+    }, { passive: true })
+    canvas.addEventListener('touchmove', e => {
+      if (!isDragging || e.touches.length !== 1) return
+      lon -= (e.touches[0].clientX - prevX) * 0.22
+      lat += (e.touches[0].clientY - prevY) * 0.22
+      prevX = e.touches[0].clientX; prevY = e.touches[0].clientY
+    }, { passive: true })
+    canvas.addEventListener('touchend', () => { isDragging = false }, { passive: true })
+
+    canvas.addEventListener('wheel', e => {
+      fov += e.deltaY * 0.04
+      fov = Math.max(30, Math.min(110, fov))
+      fovRange.value = Math.round(fov)
+      fovValEl.textContent = Math.round(fov) + '°'
+      camera.fov = fov; camera.updateProjectionMatrix()
+    }, { passive: true })
+
+    fovRange.addEventListener('input', () => {
+      fov = parseInt(fovRange.value)
+      fovValEl.textContent = fov + '°'
+      camera.fov = fov; camera.updateProjectionMatrix()
+    })
+    btnCenter.addEventListener('click', () => { lon = 0; lat = 0 })
+    btnFs.addEventListener('click', () => {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen()
+      else document.exitFullscreen()
+    })
+    document.addEventListener('fullscreenchange', () => setTimeout(onResize, 80))
+
+    window.addEventListener('keydown', e => {
+      if (e.key === 'c' || e.key === 'C') { lon = 0; lat = 0 }
+      if (e.key === 'f' || e.key === 'F') btnFs.click()
+    })
+  }
+
+  function makeSilentStream () {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const osc = ctx.createOscillator()
+    const dst = ctx.createMediaStreamDestination()
+    osc.connect(dst); osc.start()
+    const track = dst.stream.getAudioTracks()[0]
+    track.enabled = false
+    return new MediaStream([track])
+  }
+
+  function connect (targetId) {
+    badgeConn.classList.add('on')
+    errEl.classList.remove('on')
+    btnJoin.disabled = true
+    btnJoin.textContent = 'Connexion…'
+
+    peer = new Peer({ debug: 1 })
+
+    peer.on('open', () => {
+      const fakeStream = makeSilentStream()
+      call = peer.call(targetId, fakeStream)
+      if (!call) { showError('Impossible d\'appeler ' + targetId); resetJoin(); return }
+
+      call.on('stream', remoteStream => {
+        splash.style.display = 'none'
+        bottombar.classList.add('on')
+        badgeConn.classList.remove('on')
+        badgeLive.classList.add('on')
+        if (!renderer) initThree()
+        videoEl.srcObject = remoteStream
+        videoEl.play().catch(()=>{})
+      })
+
+      call.on('close', () => {
+        badgeLive.classList.remove('on')
+        showError('Le diffuseur a coupé la connexion.')
+        resetJoin()
+      })
+
+      call.on('error', err => { showError('Erreur appel : ' + err.message); resetJoin() })
+
+      setTimeout(() => {
+        if (call && (!videoEl || !videoEl.srcObject)) {
+          showError('Aucune réponse du diffuseur. Vérifie l\'ID.')
+          try { call.close() } catch(_) {}
+          resetJoin()
+        }
+      }, 12000)
+    })
+
+    peer.on('error', err => {
+      if (err.type === 'peer-unavailable') showError('ID introuvable : ' + targetId)
+      else showError('Erreur P2P : ' + err.type)
+      resetJoin()
+    })
+  }
+
+  function resetJoin () {
+    btnJoin.disabled = false
+    btnJoin.textContent = 'Rejoindre'
+    badgeConn.classList.remove('on')
+  }
+
+  btnJoin.addEventListener('click', () => {
+    const id = idInput.value.trim()
+    if (!id) { showError('Entre un ID de session.'); return }
+    connect(id)
+  })
+  idInput.addEventListener('keydown', e => { if (e.key === 'Enter') btnJoin.click() })
+
+  if (urlId) setTimeout(() => btnJoin.click(), 300)
+})()
+</script>
+</body>
+</html>

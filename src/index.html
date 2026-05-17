@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Insta360 X5 — Viewer 360°</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0a0a0f;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Barre du haut ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    height: 48px;
+    background: rgba(0,0,0,0.55);
+    border-bottom: 0.5px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  #topbar .left { display: flex; align-items: center; gap: 10px; -webkit-app-region: no-drag; }
+  #topbar .right { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
+
+  .logo { font-size: 13px; font-weight: 600; letter-spacing: 0.3px; color: #fff; }
+  .logo span { color: #5dcaa5; }
+
+  .live-badge {
+    display: none;
+    align-items: center; gap: 5px;
+    background: rgba(226,75,74,0.2);
+    border: 0.5px solid rgba(226,75,74,0.4);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px; font-weight: 600; color: #f09595;
+    letter-spacing: 0.5px;
+  }
+  .live-badge.on { display: flex; }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #e24b4a;
+    animation: pulse 1.2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+  #res-label {
+    font-size: 11px; color: rgba(255,255,255,0.4);
+    background: rgba(255,255,255,0.06);
+    border-radius: 5px; padding: 3px 8px;
+    display: none;
+  }
+  #res-label.on { display: block; }
+
+  /* ── Boutons topbar ── */
+  .tb-btn {
+    background: rgba(255,255,255,0.07);
+    border: 0.5px solid rgba(255,255,255,0.12);
+    border-radius: 7px;
+    color: #fff; font-size: 12px;
+    padding: 5px 11px; cursor: pointer;
+    display: flex; align-items: center; gap: 5px;
+    transition: background 0.15s;
+  }
+  .tb-btn:hover { background: rgba(255,255,255,0.14); }
+  .tb-btn:disabled { opacity: 0.35; cursor: default; }
+  .tb-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ── Zone principale ── */
+  #main { flex: 1; position: relative; overflow: hidden; }
+
+  canvas#c { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas#c.grabbing { cursor: grabbing; }
+
+  /* ── Écran de démarrage ── */
+  #splash {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px;
+    background: #0a0a0f;
+  }
+  #splash .icon-wrap {
+    width: 80px; height: 80px; border-radius: 20px;
+    background: rgba(93,202,165,0.1);
+    border: 0.5px solid rgba(93,202,165,0.25);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #splash .icon-wrap svg { width: 40px; height: 40px; stroke: #5dcaa5; fill: none; stroke-width: 1.5; }
+  #splash h2 { font-size: 18px; font-weight: 500; color: #fff; }
+  #splash p { font-size: 13px; color: rgba(255,255,255,0.45); text-align: center; max-width: 320px; line-height: 1.7; }
+  #splash .start-btn {
+    margin-top: 8px;
+    background: #1d9e75; border: none; border-radius: 9px;
+    color: #fff; font-size: 13px; font-weight: 500;
+    padding: 10px 28px; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    transition: background 0.15s;
+  }
+  #splash .start-btn:hover { background: #0f6e56; }
+  #splash .start-btn svg { width: 16px; height: 16px; stroke: #fff; fill: none; stroke-width: 2; }
+
+  #err-msg {
+    display: none;
+    font-size: 12px; color: #f09595;
+    background: rgba(226,75,74,0.12);
+    border: 0.5px solid rgba(226,75,74,0.3);
+    border-radius: 7px; padding: 8px 14px;
+    max-width: 340px; text-align: center;
+  }
+  #err-msg.on { display: block; }
+
+  /* ── Caméra selector ── */
+  #cam-select-wrap {
+    display: flex; align-items: center; gap: 6px;
+  }
+  #cam-select-wrap label { font-size: 11px; color: rgba(255,255,255,0.4); }
+  select#cam-select {
+    background: rgba(255,255,255,0.07);
+    border: 0.5px solid rgba(255,255,255,0.15);
+    border-radius: 6px; color: #fff;
+    font-size: 11px; padding: 4px 8px;
+    outline: none; cursor: pointer;
+  }
+  select#cam-select option { background: #1a1a22; color: #fff; }
+
+  /* ── Overlay bas ── */
+  #bottombar {
+    display: none;
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 10px 16px;
+    background: linear-gradient(to top, rgba(0,0,0,0.65) 0%, transparent 100%);
+    align-items: center; gap: 12px;
+    flex-wrap: wrap;
+  }
+  #bottombar.on { display: flex; }
+
+  .bb-btn {
+    background: rgba(255,255,255,0.1);
+    border: 0.5px solid rgba(255,255,255,0.18);
+    border-radius: 7px; color: #fff;
+    font-size: 12px; padding: 6px 12px;
+    cursor: pointer; display: flex; align-items: center; gap: 5px;
+    transition: background 0.15s;
+  }
+  .bb-btn:hover { background: rgba(255,255,255,0.2); }
+  .bb-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  #fov-group { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  #fov-group label { font-size: 11px; color: rgba(255,255,255,0.5); }
+  input[type=range]#fov {
+    -webkit-appearance: none; appearance: none;
+    width: 100px; height: 3px;
+    background: rgba(255,255,255,0.2); border-radius: 2px; outline: none;
+  }
+  input[type=range]#fov::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #5dcaa5; cursor: pointer;
+  }
+  #fov-val { font-size: 11px; color: rgba(255,255,255,0.6); min-width: 28px; }
+
+  /* ── Crosshair ── */
+  #crosshair {
+    display: none;
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  #crosshair.on { display: block; }
+  #crosshair::before, #crosshair::after {
+    content: ''; position: absolute; background: rgba(255,255,255,0.4);
+  }
+  #crosshair::before { width: 16px; height: 1px; top: 0; left: -8px; }
+  #crosshair::after  { width: 1px; height: 16px; top: -8px; left: 0; }
+
+  /* ── Bouton Live actif ── */
+  .tb-btn.broadcasting {
+    background: rgba(226,75,74,0.25);
+    border-color: rgba(226,75,74,0.55);
+    color: #ffb1b0;
+  }
+  .tb-btn.broadcasting:hover { background: rgba(226,75,74,0.4); }
+
+  /* ── Modal Live ── */
+  .modal-bg {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); z-index: 100;
+    align-items: center; justify-content: center;
+    backdrop-filter: blur(6px);
+  }
+  .modal-bg.on { display: flex; }
+  .modal-card {
+    background: #161620; border: 0.5px solid rgba(255,255,255,0.12);
+    border-radius: 12px; padding: 20px 22px;
+    width: 460px; max-width: 92vw; max-height: 92vh; overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .modal-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+  .modal-head h3 { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 3px; }
+  .modal-sub { font-size: 11px; color: rgba(255,255,255,0.45); }
+  .modal-close {
+    background: transparent; border: none; color: rgba(255,255,255,0.5);
+    font-size: 22px; cursor: pointer; padding: 0 4px; line-height: 1;
+  }
+  .modal-close:hover { color: #fff; }
+
+  .live-status {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 12px; border-radius: 7px;
+    font-size: 11px; margin-bottom: 14px;
+  }
+  .live-status .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .live-status.connecting { background: rgba(255,184,77,0.12); color: #ffb84d; }
+  .live-status.connecting .status-dot { background: #ffb84d; animation: pulse 1.2s infinite; }
+  .live-status.live { background: rgba(93,202,165,0.15); color: #5dcaa5; }
+  .live-status.live .status-dot { background: #5dcaa5; animation: pulse 1.5s infinite; }
+  .live-status.error { background: rgba(226,75,74,0.15); color: #f09595; }
+  .live-status.error .status-dot { background: #e24b4a; }
+
+  .modal-row { margin-bottom: 12px; }
+  .modal-row label {
+    display: block; font-size: 10px; color: rgba(255,255,255,0.45);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px;
+  }
+  .copy-row { display: flex; gap: 6px; }
+  .copy-row input {
+    flex: 1; background: rgba(255,255,255,0.05);
+    border: 0.5px solid rgba(255,255,255,0.1);
+    border-radius: 6px; color: #fff; font-size: 12px;
+    padding: 6px 10px; outline: none;
+    font-family: 'SF Mono', Menlo, monospace;
+  }
+  .copy-row input:focus { border-color: rgba(93,202,165,0.5); }
+  .modal-hint { font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 6px; line-height: 1.5; }
+  .modal-hint code {
+    background: rgba(255,255,255,0.07);
+    padding: 1px 5px; border-radius: 3px;
+    font-family: 'SF Mono', Menlo, monospace; font-size: 10px;
+  }
+
+  .qr-row { display: flex; justify-content: center; padding: 8px 0; }
+  #live-qr {
+    width: 140px; height: 140px; background: #fff;
+    border-radius: 7px; padding: 8px; display: none;
+  }
+  #live-qr.on { display: block; }
+
+  .viewers { font-size: 11px; color: rgba(255,255,255,0.55); }
+  .viewers label { color: rgba(255,255,255,0.55); text-transform: none; letter-spacing: 0; font-size: 11px; }
+  .viewers #viewer-count { color: #5dcaa5; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- Barre du haut -->
+<div id="topbar">
+  <div class="left">
+    <div class="logo">Insta360 <span>360°</span> Viewer</div>
+    <div class="live-badge" id="live-badge">
+      <div class="live-dot"></div>
+      LIVE
+    </div>
+    <div id="res-label"></div>
+  </div>
+  <div class="right">
+    <div id="cam-select-wrap">
+      <label for="cam-select">Caméra</label>
+      <select id="cam-select"><option value="">-- Détection --</option></select>
+    </div>
+    <button class="tb-btn" id="btn-live" disabled title="Diffuser en direct (P2P)">
+      <svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+      Live
+    </button>
+    <button class="tb-btn" id="btn-stop" disabled>
+      <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      Arrêter
+    </button>
+  </div>
+</div>
+
+<!-- Modal Live -->
+<div id="live-modal" class="modal-bg">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div>
+        <h3>Diffusion en direct</h3>
+        <p class="modal-sub">Partage ce lien à tes spectateurs (P2P, sans serveur)</p>
+      </div>
+      <button class="modal-close" id="btn-live-close" title="Fermer">×</button>
+    </div>
+
+    <div id="live-status" class="live-status connecting">
+      <span class="status-dot"></span>
+      <span id="live-status-text">Connexion au réseau P2P…</span>
+    </div>
+
+    <div class="modal-row">
+      <label>ID de session</label>
+      <div class="copy-row">
+        <input id="live-id" type="text" readonly value="—">
+        <button class="bb-btn" id="btn-copy-id">Copier</button>
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>Lien à partager</label>
+      <div class="copy-row">
+        <input id="live-url" type="text" readonly value="—">
+        <button class="bb-btn" id="btn-copy-url">Copier</button>
+      </div>
+      <div class="modal-hint">
+        Par défaut pointe vers <code>viewer.html</code> en local.
+        Pour partager hors LAN, héberge <code>viewer.html</code> (GitHub Pages, Netlify…)
+        et change l'URL ci-dessous.
+      </div>
+    </div>
+
+    <div class="modal-row">
+      <label>URL du viewer (personnalisable)</label>
+      <div class="copy-row">
+        <input id="viewer-base" type="text" placeholder="https://mon-site.example/viewer.html">
+        <button class="bb-btn" id="btn-save-base">OK</button>
+      </div>
+    </div>
+
+    <div class="modal-row qr-row">
+      <img id="live-qr" alt="QR code" />
+    </div>
+
+    <div class="modal-row viewers">
+      <label>Spectateurs connectés : <span id="viewer-count">0</span></label>
+    </div>
+
+    <div class="modal-row" style="display:flex; justify-content:flex-end; margin-top:8px;">
+      <button class="bb-btn" id="btn-stop-live" style="background: rgba(226,75,74,0.2); border-color: rgba(226,75,74,0.4); color:#f09595;">
+        Arrêter le live
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Zone 3D -->
+<div id="main">
+  <canvas id="c"></canvas>
+  <div id="crosshair"></div>
+  <div id="bottombar">
+    <button class="bb-btn" id="btn-center">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/></svg>
+      Centrer
+    </button>
+    <button class="bb-btn" id="btn-cross">
+      <svg viewBox="0 0 24 24"><path d="M12 2v20M2 12h20"/></svg>
+      Réticule
+    </button>
+    <button class="bb-btn" id="btn-fs">
+      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M21 16v3a2 2 0 01-2 2h-3M8 21H5a2 2 0 01-2-2v-3"/></svg>
+      Plein écran
+    </button>
+    <div id="fov-group">
+      <label for="fov">Zoom</label>
+      <input type="range" id="fov" min="30" max="110" value="75" step="1">
+      <span id="fov-val">75°</span>
+    </div>
+  </div>
+
+  <!-- Splash screen -->
+  <div id="splash">
+    <div class="icon-wrap">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a9 9 0 010 18M12 3c-2.5 2.5-4 5.5-4 9s1.5 6.5 4 9M12 3c2.5 2.5 4 5.5 4 9s-1.5 6.5-4 9"/></svg>
+    </div>
+    <h2>Viewer 360°</h2>
+    <p>Branche ta caméra Insta360 X5 en mode <strong>Webcam</strong> via USB-C, puis clique sur Démarrer.</p>
+    <div id="err-msg"></div>
+    <button class="start-btn" id="btn-start">
+      <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Démarrer
+    </button>
+  </div>
+</div>
+
+<!-- Three.js depuis fichier local (copié dans src/) -->
+<script src="three.min.js"></script>
+<!-- PeerJS pour le live streaming P2P (signaling cloud public, gratuit) -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
