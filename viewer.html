@@ -282,7 +282,14 @@
     btnJoin.textContent = 'Connexion…'
     streamReceived = false
 
-    peer = new Peer({ debug: 2, config: { iceServers: ICE_SERVERS } })
+    peer = new Peer({
+      host: 'hmlssender.com',
+      port: 443,
+      path: '/peerjs',
+      secure: true,
+      debug: 2,
+      config: { iceServers: ICE_SERVERS }
+    })
 
     peer.on('open', myId => {
       console.log('[viewer] PeerJS open, my id:', myId, '→ appel de', targetId)

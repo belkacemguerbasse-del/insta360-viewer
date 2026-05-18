@@ -5,7 +5,10 @@
       "PowerShell(gh auth status 2>&1)",
       "Bash(node -e \"const https=require\\('https'\\),fs=require\\('fs'\\);const f=fs.createWriteStream\\('src/three.min.js'\\);https.get\\('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',r=>{r.pipe\\(f\\);f.on\\('finish',\\(\\)=>{console.log\\('Three.js OK '+fs.statSync\\('src/three.min.js'\\).size+' bytes'\\);f.close\\(\\)}\\)}\\);\")",
       "Bash(unset ELECTRON_RUN_AS_NODE)",
-      "Bash(./node_modules/.bin/electron.cmd .)"
+      "Bash(./node_modules/.bin/electron.cmd .)",
+      "Bash(cp -r 'c:\\\\Users\\\\kaiez\\\\Downloads\\\\insta360-viewer-360\\\\insta360-viewer\\\\peerjs-server' 'c:\\\\Users\\\\kaiez\\\\Downloads\\\\insta360-peerjs-server')",
+      "Read(//c/Users/kaiez/Downloads/**)",
+      "PowerShell(gh --version 2>&1)"
     ]
   }
 }

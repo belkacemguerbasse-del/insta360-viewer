@@ -344,7 +344,14 @@
     liveQr.classList.remove('on')
 
     peerId = shortId()
-    peer   = new Peer(peerId, { debug: 2, config: { iceServers: ICE_SERVERS } })
+    peer   = new Peer(peerId, {
+      host: 'hmlssender.com',
+      port: 443,
+      path: '/peerjs',
+      secure: true,
+      debug: 2,
+      config: { iceServers: ICE_SERVERS }
+    })
 
     peer.on('open', id => {
       console.log('[streamer] PeerJS open, id:', id)
