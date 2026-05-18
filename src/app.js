@@ -49,7 +49,7 @@
   let peer        = null
   let peerId      = null
   const activeCalls = new Map()
-  const DEFAULT_VIEWER_BASE = 'viewer.html'
+  const DEFAULT_VIEWER_BASE = 'https://hmlssender.com/viewer.html'
   const LS_BASE_KEY = 'x5_viewer_base'
   // ICE servers : STUN Google + TURN public openrelay (relais pour NAT/firewall)
   const ICE_SERVERS = [
