@@ -302,6 +302,16 @@
   })
 
   // ── LIVE STREAMING P2P (PeerJS) ────────────────────────────────────────────
+  // État de la session live (sessionActive = true tant que l'user n'a pas explicitement arrêté)
+  let sessionActive       = false
+  let reconnectAttempt    = 0
+  let reconnectTimer      = null
+  let openWatchdog        = null
+  let healthInterval      = null
+  let reconnectPending    = false   // debounce : 1 seul reconnect par "incident"
+  let unavailableIdCount  = 0       // compteur d'échecs unavailable-id consécutifs
+  let peerGen             = 0       // génération du peer (pour ignorer les events des peers obsolètes)
+
   function shortId () { return 'x5-' + Math.random().toString(36).slice(2, 8) }
 
   function setLiveStatus (state, text) {
@@ -329,8 +339,151 @@
     liveQr.classList.add('on')
   }
 
+  // Ferme et purge une connexion viewer
+  function dropCall (peerKey, reason) {
+    const c = activeCalls.get(peerKey)
+    if (!c) return
+    console.log('[streamer] drop', peerKey, 'reason:', reason)
+    try { c.close() } catch (_) {}
+    if (c._iceFailTimer) clearTimeout(c._iceFailTimer)
+    activeCalls.delete(peerKey)
+    updateViewerCount()
+  }
+
+  // Branche les events sur une call entrante (avec auto-cleanup robuste)
+  function wireCall (call) {
+    if (activeCalls.has(call.peer)) {
+      console.log('[streamer] re-call from', call.peer, '→ purge ancienne')
+      dropCall(call.peer, 'replaced-by-new-call')
+    }
+    activeCalls.set(call.peer, call)
+    updateViewerCount()
+
+    const pc = call.peerConnection
+    if (pc) {
+      pc.addEventListener('iceconnectionstatechange', () => {
+        const s = pc.iceConnectionState
+        console.log('[streamer] ICE', call.peer, ':', s)
+        if (s === 'disconnected') {
+          call._iceFailTimer = setTimeout(() => {
+            const st = pc.iceConnectionState
+            if (st === 'disconnected' || st === 'failed') dropCall(call.peer, 'ice-disconnected-8s')
+          }, 8000)
+        }
+        if (s === 'connected' || s === 'completed') {
+          if (call._iceFailTimer) { clearTimeout(call._iceFailTimer); call._iceFailTimer = null }
+        }
+        if (s === 'failed' || s === 'closed') dropCall(call.peer, 'ice-' + s)
+      })
+    }
+    call.on('close', () => dropCall(call.peer, 'call-close'))
+    call.on('error', err => {
+      console.warn('[streamer] call error', err)
+      dropCall(call.peer, 'call-error')
+    })
+  }
+
+  // ── Reconnexion : machine d'état centrale ───────────────────────────────
+  // Détruit le peer courant (toujours) et planifie un nouveau spawnPeer.
+  // Backoff exponentiel jusqu'à 10 s max. S'auto-stoppe si sessionActive = false.
+  function scheduleReconnect (reason) {
+    if (!sessionActive) { console.log('[streamer] reconnect skipped (no active session):', reason); return }
+    clearTimeout(reconnectTimer)
+    clearTimeout(openWatchdog)
+
+    // Destruction systématique du peer fantôme (peer.reconnect() de PeerJS est trop fragile)
+    if (peer) {
+      try { peer.destroy() } catch (_) {}
+      peer = null
+    }
+
+    if (!navigator.onLine) {
+      setLiveStatus('connecting', 'Hors-ligne — attente du réseau…')
+      console.warn('[streamer] offline — waiting for online event')
+      return
+    }
+
+    reconnectAttempt++
+    const delay = Math.min(1000 * Math.pow(1.6, reconnectAttempt - 1), 10000) | 0
+    console.log(`[streamer] reconnect #${reconnectAttempt} in ${delay}ms (reason: ${reason})`)
+    setLiveStatus('connecting', `Reconnexion (essai ${reconnectAttempt})…`)
+
+    reconnectTimer = setTimeout(() => {
+      if (!sessionActive) return
+      spawnPeer()
+    }, delay)
+  }
+
+  // (Re)crée le peer en réutilisant peerId
+  function spawnPeer () {
+    if (!sessionActive || !peerId) return
+    clearTimeout(openWatchdog)
+
+    peer = new Peer(peerId, {
+      host: 'hmlssender.com',
+      port: 443,
+      path: '/peerjs',
+      secure: true,
+      debug: 2,
+      config: { iceServers: ICE_SERVERS }
+    })
+
+    // Watchdog : si pas d'open en 8 s, on retry
+    openWatchdog = setTimeout(() => {
+      if (peer && !peer.open) {
+        console.warn('[streamer] open watchdog timeout')
+        scheduleReconnect('open-timeout')
+      }
+    }, 8000)
+
+    peer.on('open', id => {
+      console.log('[streamer] PeerJS open, id:', id)
+      clearTimeout(openWatchdog)
+      reconnectAttempt = 0
+      peerId = id
+      liveIdInput.value = id
+      refreshUrlAndQr()
+      setLiveStatus('live', 'EN DIRECT — en attente de spectateurs')
+      btnLive.classList.add('broadcasting')
+      btnLive.title = 'Live actif — cliquer pour gérer'
+    })
+
+    peer.on('call', call => {
+      console.log('[streamer] incoming call from', call.peer)
+      try { call.answer(stream) } catch (e) { console.warn('answer failed', e); return }
+      wireCall(call)
+    })
+
+    peer.on('error', err => {
+      console.error('[streamer] peer error', err.type, err)
+      // Toutes les erreurs récupérables → reconnect (même unavailable-id : on garde l'id, l'ancien socket sera libéré sous peu)
+      const recoverable = [
+        'network', 'server-error', 'socket-error', 'socket-closed',
+        'unavailable-id', 'disconnected', 'browser-incompatible'
+      ]
+      if (recoverable.includes(err.type)) {
+        scheduleReconnect('error-' + err.type)
+      } else {
+        // Erreurs fatales (peer-unavailable côté call, invalid-key, etc.) — on log mais on retry quand même
+        scheduleReconnect('error-fatal-' + err.type)
+      }
+    })
+
+    peer.on('disconnected', () => {
+      console.warn('[streamer] peer disconnected from signaling server')
+      // On ne fait PAS confiance à peer.reconnect() → on recrée
+      scheduleReconnect('peer-disconnected')
+    })
+
+    peer.on('close', () => {
+      console.warn('[streamer] peer closed (destroyed)')
+      peer = null
+      if (sessionActive) scheduleReconnect('peer-close')
+    })
+  }
+
   function startLive () {
-    if (peer) { liveModal.classList.add('on'); return }
+    if (sessionActive && peer && peer.open) { liveModal.classList.add('on'); return }
     if (!stream) {
       setLiveStatus('error', 'Démarre d\'abord la caméra')
       liveModal.classList.add('on')
@@ -343,68 +496,28 @@
     liveUrlInput.value = '—'
     liveQr.classList.remove('on')
 
-    peerId = shortId()
-    peer   = new Peer(peerId, {
-      host: 'hmlssender.com',
-      port: 443,
-      path: '/peerjs',
-      secure: true,
-      debug: 2,
-      config: { iceServers: ICE_SERVERS }
-    })
-
-    peer.on('open', id => {
-      console.log('[streamer] PeerJS open, id:', id)
-      peerId = id
-      liveIdInput.value = id
-      refreshUrlAndQr()
-      setLiveStatus('live', 'EN DIRECT — en attente de spectateurs')
-      btnLive.classList.add('broadcasting')
-      btnLive.title = 'Live actif — cliquer pour gérer'
-    })
-
-    peer.on('call', call => {
-      console.log('[streamer] incoming call from', call.peer)
-      call.answer(stream)
-      activeCalls.set(call.peer, call)
-      updateViewerCount()
-      if (call.peerConnection) {
-        call.peerConnection.addEventListener('iceconnectionstatechange', () => {
-          console.log('[streamer] ICE with', call.peer, ':', call.peerConnection.iceConnectionState)
-        })
-      }
-      call.on('close', () => {
-        console.log('[streamer] call closed:', call.peer)
-        activeCalls.delete(call.peer); updateViewerCount()
-      })
-      call.on('error', err => {
-        console.warn('[streamer] call error', err)
-        activeCalls.delete(call.peer); updateViewerCount()
-      })
-    })
-
-    peer.on('error', err => {
-      console.error('peer error', err)
-      setLiveStatus('error', 'Erreur P2P : ' + err.type)
-      if (err.type === 'unavailable-id') {
-        stopLive(true)
-        setTimeout(startLive, 300)
-      }
-    })
-
-    peer.on('disconnected', () => {
-      setLiveStatus('connecting', 'Reconnexion…')
-      try { peer.reconnect() } catch (_) {}
-    })
+    sessionActive    = true
+    reconnectAttempt = 0
+    peerId           = shortId()       // ID stable pour toute la session
+    spawnPeer()
+    startHealthCheck()
   }
 
   function stopLive (silent) {
-    activeCalls.forEach(c => { try { c.close() } catch (_) {} })
+    sessionActive    = false
+    reconnectAttempt = 0
+    clearTimeout(reconnectTimer); reconnectTimer = null
+    clearTimeout(openWatchdog);   openWatchdog   = null
+    stopHealthCheck()
+
+    activeCalls.forEach((c, k) => dropCall(k, 'stop-live'))
     activeCalls.clear()
     updateViewerCount()
+
     if (peer) { try { peer.destroy() } catch (_) {} }
-    peer = null
+    peer   = null
     peerId = null
+
     btnLive.classList.remove('broadcasting')
     btnLive.title = 'Diffuser en direct (P2P)'
     if (!silent) {
@@ -415,9 +528,60 @@
     }
   }
 
+  // Health check : toutes les 4s, vérifie l'état du peer
+  function startHealthCheck () {
+    stopHealthCheck()
+    healthInterval = setInterval(() => {
+      if (!sessionActive) return
+      // Cas zombie : peer existe mais .destroyed ou .disconnected
+      if (peer && (peer.destroyed || peer.disconnected)) {
+        console.warn('[streamer] health check: zombie peer detected', { destroyed: peer.destroyed, disconnected: peer.disconnected })
+        scheduleReconnect('health-zombie')
+      }
+      // Cas peer null mais session active → relance
+      if (!peer && sessionActive) {
+        console.warn('[streamer] health check: no peer but session active')
+        scheduleReconnect('health-no-peer')
+      }
+    }, 4000)
+  }
+  function stopHealthCheck () {
+    if (healthInterval) { clearInterval(healthInterval); healthInterval = null }
+  }
+
+  // Réagit au branchement/débranchement réseau
+  window.addEventListener('online', () => {
+    console.log('[streamer] window online')
+    if (sessionActive) {
+      reconnectAttempt = 0          // reset backoff (réseau frais)
+      scheduleReconnect('window-online')
+    }
+  })
+  window.addEventListener('offline', () => {
+    console.warn('[streamer] window offline')
+    if (sessionActive) {
+      setLiveStatus('connecting', 'Hors-ligne — attente du réseau…')
+      // Ne pas tenter de reconnect tant qu'on est offline
+      clearTimeout(reconnectTimer)
+    }
+  })
+
   btnLive.addEventListener('click', () => {
-    if (peer) liveModal.classList.add('on')
-    else      startLive()
+    // Session déjà active et peer en bonne santé → juste ouvrir la modal
+    if (sessionActive && peer && peer.open && !peer.destroyed && !peer.disconnected) {
+      liveModal.classList.add('on')
+      return
+    }
+    // Session active mais peer en mauvais état → forcer une reconnexion
+    if (sessionActive) {
+      liveModal.classList.add('on')
+      console.log('[streamer] manual reconnect from Live button')
+      reconnectAttempt = 0
+      scheduleReconnect('manual-live-click')
+      return
+    }
+    // Pas de session → démarrer
+    startLive()
   })
 
   btnStopLive.addEventListener('click', () => {
